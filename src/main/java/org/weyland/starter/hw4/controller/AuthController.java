@@ -59,10 +59,10 @@ public class AuthController {
         String email = req.getEmail();
         String password = req.getPassword();
         if (userService.existsByLogin(login)) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Login already exists"));
+            throw new IllegalArgumentException("Login already exists");
         }
         if (userService.existsByEmail(email)) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Email already exists"));
+            throw new IllegalArgumentException("Email already exists");
         }
         User user = userService.registerUser(login, email, password);
         return ResponseEntity.ok(Map.of("id", user.getId(), "login", user.getLogin(), "email", user.getEmail()));
@@ -75,7 +75,7 @@ public class AuthController {
         String password = req.getPassword();
         var userOpt = userService.findByLogin(login);
         if (userOpt.isEmpty() || !passwordEncoder.matches(password, userOpt.get().getPassword())) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "Invalid credentials"));
+            throw new org.springframework.security.authentication.BadCredentialsException("Invalid credentials");
         }
         var user = userOpt.get();
         String accessToken = jwtService.generateAccessToken(user, accessTokenExpiration);
@@ -94,11 +94,11 @@ public class AuthController {
         String refreshTokenValue = req.getRefreshToken();
         var tokenOpt = tokenService.findByToken(refreshTokenValue);
         if (tokenOpt.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "Invalid refresh token"));
+            throw new org.springframework.security.authentication.BadCredentialsException("Invalid refresh token");
         }
         var token = tokenOpt.get();
         if (token.isRevoked() || token.isUsed() || token.getExpiresAt().isBefore(Instant.now())) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "Refresh token is not valid"));
+            throw new org.springframework.security.authentication.BadCredentialsException("Refresh token is not valid");
         }
         var user = token.getUser();
         tokenService.markTokenUsed(token);
@@ -118,11 +118,11 @@ public class AuthController {
         String refreshTokenValue = req.getRefreshToken();
         var tokenOpt = tokenService.findByToken(refreshTokenValue);
         if (tokenOpt.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "Invalid refresh token"));
+            throw new org.springframework.security.authentication.BadCredentialsException("Invalid refresh token");
         }
         var token = tokenOpt.get();
         if (token.isRevoked()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Token already revoked"));
+            throw new IllegalStateException("Token already revoked");
         }
         tokenService.revokeToken(token);
         auditService.log(token.getUser(), "LOGOUT", request.getRemoteAddr());

@@ -24,12 +24,10 @@ public class DataInitializer {
             @Value("${admin.email:admin@admin.com}") String adminEmail
     ) {
         return args -> {
-            // Создать роли, если их нет
             for (RoleName roleName : RoleName.values()) {
                 roleRepository.findByName(roleName)
                     .orElseGet(() -> roleRepository.save(Role.builder().name(roleName).build()));
             }
-            // Создать админа, если его нет
             if (userRepository.findByLogin(adminLogin).isEmpty()) {
                 Role adminRole = roleRepository.findByName(RoleName.ADMIN).orElseThrow();
                 Role userRole = roleRepository.findByName(RoleName.USER).orElseThrow();

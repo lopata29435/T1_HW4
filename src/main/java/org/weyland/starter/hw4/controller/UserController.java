@@ -54,10 +54,10 @@ public class UserController {
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<?> changeUserRole(@PathVariable Long id, @RequestParam RoleName role, Principal principal) {
         var userOpt = userRepository.findById(id);
-        if (userOpt.isEmpty()) return ResponseEntity.notFound().build();
+        if (userOpt.isEmpty()) throw new java.util.NoSuchElementException("User not found");
         var user = userOpt.get();
         if (user.getLogin().equals(principal.getName())) {
-            return ResponseEntity.badRequest().body("Нельзя менять роль самому себе");
+            throw new IllegalArgumentException("Нельзя менять роль самому себе");
         }
         Role newRole = roleRepository.findByName(role).orElseThrow();
         user.setRoles(Set.of(newRole));
