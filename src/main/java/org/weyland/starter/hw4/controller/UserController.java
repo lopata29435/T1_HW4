@@ -12,6 +12,7 @@ import org.weyland.starter.hw4.model.RoleName;
 import org.weyland.starter.hw4.repository.RoleRepository;
 import org.springframework.http.ResponseEntity;
 import java.security.Principal;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -60,7 +61,9 @@ public class UserController {
             throw new IllegalArgumentException("Нельзя менять роль самому себе");
         }
         Role newRole = roleRepository.findByName(role).orElseThrow();
-        user.setRoles(Set.of(newRole));
+        Set<Role> roles = new HashSet<>();
+        roles.add(newRole);
+        user.setRoles(roles);
         userRepository.save(user);
         return ResponseEntity.ok("Роль пользователя обновлена");
     }
