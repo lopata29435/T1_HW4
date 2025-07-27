@@ -1,0 +1,25 @@
+version: '3.8'
+services:
+  db:
+    image: postgres:16
+    restart: always
+    environment:
+      POSTGRES_DB: hw4db
+      POSTGRES_USER: hw4user
+      POSTGRES_PASSWORD: hw4pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+  app:
+    build: .
+    depends_on:
+      - db
+    environment:
+      SPRING_PROFILES_ACTIVE: default
+    ports:
+      - "8080:8080"
+    restart: always
+    command: ["java", "-jar", "/app.jar"]
+volumes:
+  pgdata: 
