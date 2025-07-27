@@ -1,5 +1,6 @@
 package org.weyland.starter.hw4.service;
 
+import com.nimbusds.jwt.JWTClaimsSet;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -11,8 +12,10 @@ import org.weyland.starter.hw4.repository.RefreshTokenRepository;
 import org.weyland.starter.hw4.security.TokenEncryptionService;
 
 import java.time.Instant;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
-import java.util.UUID;
 
 @Service
 @Transactional
@@ -28,14 +31,24 @@ public class TokenService {
 
     @Transactional
     public AccessToken createAccessToken(User user, String ipAddress, String userAgent, String fingerprint) {
-        String rawToken = UUID.randomUUID().toString();
-        String encryptedToken = tokenEncryptionService.encryptToken(rawToken);
+        Map<String, Object> claims = new HashMap<>();
+        claims.put("type", "access");
+        claims.put("userId", user.getId());
+        claims.put("roles", user.getRoles().stream().map(r -> r.getName().name()).toList());
+        claims.put("exp", Date.from(Instant.now().plusSeconds(900))); // 15 минут
+        claims.put("ip", ipAddress);
+        claims.put("ua", userAgent);
+        if (fingerprint != null) {
+            claims.put("fp", fingerprint);
+        }
+
+        String jweToken = tokenEncryptionService.createJwe(user.getLogin(), claims);
 
         AccessToken token = AccessToken.builder()
                 .user(user)
-                .token(encryptedToken)
+                .token(jweToken)
                 .roles(new java.util.HashSet<>(user.getRoles()))
-                .expiresAt(Instant.now().plusSeconds(900))
+                .expiresAt(Instant.now().plusSeconds(900)) // 15 минут
                 .ipAddress(ipAddress)
                 .userAgent(userAgent)
                 .fingerprint(fingerprint)
@@ -47,13 +60,22 @@ public class TokenService {
 
     @Transactional
     public RefreshToken createRefreshToken(User user, String ipAddress, String userAgent, String fingerprint) {
-        String rawToken = UUID.randomUUID().toString();
-        String encryptedToken = tokenEncryptionService.encryptToken(rawToken);
+        Map<String, Object> claims = new HashMap<>();
+        claims.put("type", "refresh");
+        claims.put("userId", user.getId());
+        claims.put("exp", Date.from(Instant.now().plusSeconds(604800))); // 7 дней
+        claims.put("ip", ipAddress);
+        claims.put("ua", userAgent);
+        if (fingerprint != null) {
+            claims.put("fp", fingerprint);
+        }
+
+        String jweToken = tokenEncryptionService.createJwe(user.getLogin(), claims);
 
         RefreshToken token = RefreshToken.builder()
                 .user(user)
-                .token(encryptedToken)
-                .expiresAt(Instant.now().plusSeconds(604800))
+                .token(jweToken)
+                .expiresAt(Instant.now().plusSeconds(604800)) // 7 дней
                 .revoked(false)
                 .used(false)
                 .ipAddress(ipAddress)
@@ -65,23 +87,41 @@ public class TokenService {
     }
 
     @Transactional
-    public boolean validateAccessToken(String encryptedToken, String ipAddress, String userAgent, String fingerprint) {
+    public boolean validateAccessToken(String jweToken, String ipAddress, String userAgent, String fingerprint) {
         try {
-            String decryptedToken = tokenEncryptionService.decryptToken(encryptedToken);
-
-            Optional<AccessToken> tokenOpt = accessTokenRepository.findByToken(encryptedToken);
-            if (tokenOpt.isEmpty()) {
+            if (!tokenEncryptionService.validateJwe(jweToken)) {
                 return false;
             }
 
-            AccessToken token = tokenOpt.get();
+            JWTClaimsSet claims = tokenEncryptionService.parseJwe(jweToken);
 
-            if (token.isRevoked()) {
+            if (!"access".equals(claims.getStringClaim("type"))) {
                 return false;
             }
 
-            if (!token.getExpiresAt().isAfter(Instant.now())) {
+            Date expiration = claims.getDateClaim("exp");
+            if (expiration != null && expiration.before(new Date())) {
                 return false;
+            }
+
+            Optional<AccessToken> tokenOpt = accessTokenRepository.findByToken(jweToken);
+            if (tokenOpt.isEmpty() || tokenOpt.get().isRevoked()) {
+                return false;
+            }
+
+            if (ipAddress != null && !ipAddress.equals(claims.getStringClaim("ip"))) {
+                return false;
+            }
+
+            if (userAgent != null && !userAgent.equals(claims.getStringClaim("ua"))) {
+                return false;
+            }
+
+            if (fingerprint != null) {
+                String tokenFingerprint = claims.getStringClaim("fp");
+                if (tokenFingerprint != null && !fingerprint.equals(tokenFingerprint)) {
+                    return false;
+                }
             }
 
             return true;
@@ -115,5 +155,24 @@ public class TokenService {
     @Transactional
     public void revokeAccessTokensByRefreshToken(Long refreshTokenId) {
         accessTokenRepository.revokeAllByRefreshTokenId(refreshTokenId);
+    }
+
+
+    public Long extractUserId(String jweToken) {
+        try {
+            JWTClaimsSet claims = tokenEncryptionService.parseJwe(jweToken);
+            return claims.getLongClaim("userId");
+        } catch (Exception e) {
+            throw new RuntimeException("Error extracting user ID from token", e);
+        }
+    }
+
+    public String extractUsername(String jweToken) {
+        try {
+            JWTClaimsSet claims = tokenEncryptionService.parseJwe(jweToken);
+            return claims.getSubject();
+        } catch (Exception e) {
+            throw new RuntimeException("Error extracting username from token", e);
+        }
     }
 }

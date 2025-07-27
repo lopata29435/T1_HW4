@@ -32,18 +32,13 @@ public class UserController {
     @Operation(summary = "Получить всех пользователей (только ADMIN)")
     @GetMapping
     @PreAuthorize("hasRole('ADMIN')")
-    public List<User> getAllUsers(
-            @RequestHeader(value = "X-Fingerprint", required = false) String fingerprint
-    ) {
+    public List<User> getAllUsers() {
         return userRepository.findAll();
     }
 
     @Operation(summary = "Получить свои данные (любой авторизованный)")
     @GetMapping("/me")
-    public User getMe(
-            Principal principal,
-            @RequestHeader(value = "X-Fingerprint", required = false) String fingerprint
-    ) {
+    public User getMe(Principal principal) {
         Optional<User> user = userRepository.findByLogin(principal.getName());
         return user.orElseThrow();
     }
@@ -51,10 +46,7 @@ public class UserController {
     @Operation(summary = "Получить пользователя по id (ADMIN или владелец)")
     @GetMapping("/{id}")
     @PreAuthorize("hasRole('ADMIN') or hasPermission(#id, 'User', 'read')")
-    public User getUserById(
-            @PathVariable Long id,
-            @RequestHeader(value = "X-Fingerprint", required = false) String fingerprint
-    ) {
+    public User getUserById(@PathVariable Long id) {
         return userRepository.findById(id).orElseThrow();
     }
 
@@ -64,8 +56,7 @@ public class UserController {
     public ResponseEntity<?> changeUserRole(
             @PathVariable Long id,
             @RequestParam RoleName role,
-            Principal principal,
-            @RequestHeader(value = "X-Fingerprint", required = false) String fingerprint
+            Principal principal
     ) {
         var userOpt = userRepository.findById(id);
         if (userOpt.isEmpty()) throw new java.util.NoSuchElementException("User not found");

@@ -56,8 +56,7 @@ public class AuthController {
     @PostMapping("/login")
     public ResponseEntity<?> login(
             @Valid @RequestBody LoginRequest req,
-            HttpServletRequest request,
-            @RequestHeader(value = "X-Fingerprint", required = false) String fingerprint
+            HttpServletRequest request
     ) {
         String login = req.getLogin();
         String password = req.getPassword();
@@ -71,8 +70,8 @@ public class AuthController {
         String ipAddress = getClientIp(request);
         String userAgent = request.getHeader("User-Agent");
 
-        AccessToken accessToken = tokenService.createAccessToken(user, ipAddress, userAgent, fingerprint);
-        RefreshToken refreshToken = tokenService.createRefreshToken(user, ipAddress, userAgent, fingerprint);
+        AccessToken accessToken = tokenService.createAccessToken(user, ipAddress, userAgent, null);
+        RefreshToken refreshToken = tokenService.createRefreshToken(user, ipAddress, userAgent, null);
 
         auditService.log(user, "LOGIN", ipAddress);
 
@@ -86,8 +85,7 @@ public class AuthController {
     @PostMapping("/refresh")
     public ResponseEntity<?> refresh(
             @Valid @RequestBody RefreshRequest req,
-            HttpServletRequest request,
-            @RequestHeader(value = "X-Fingerprint", required = false) String fingerprint
+            HttpServletRequest request
     ) {
         String refreshTokenValue = req.getRefreshToken();
         String ipAddress = getClientIp(request);
@@ -101,8 +99,7 @@ public class AuthController {
         var refreshToken = tokenOpt.get();
 
         if (!refreshToken.getIpAddress().equals(ipAddress) ||
-                !refreshToken.getUserAgent().equals(userAgent) ||
-                (fingerprint != null && !fingerprint.equals(refreshToken.getFingerprint()))) {
+                !refreshToken.getUserAgent().equals(userAgent)) {
             throw new org.springframework.security.authentication.BadCredentialsException("Token binding mismatch");
         }
 
@@ -115,7 +112,7 @@ public class AuthController {
                 refreshToken.getUser(),
                 ipAddress,
                 userAgent,
-                fingerprint
+                null
         );
 
         tokenService.markTokenUsed(refreshToken);
@@ -124,7 +121,7 @@ public class AuthController {
                 refreshToken.getUser(),
                 ipAddress,
                 userAgent,
-                fingerprint
+                null
         );
 
         tokenService.revokeAccessTokensByRefreshToken(refreshToken.getId());
@@ -139,8 +136,7 @@ public class AuthController {
     @PostMapping("/logout")
     public ResponseEntity<?> logout(
             @Valid @RequestBody LogoutRequest req,
-            HttpServletRequest request,
-            @RequestHeader(value = "X-Fingerprint", required = false) String fingerprint
+            HttpServletRequest request
     ) {
         String refreshTokenValue = req.getRefreshToken();
         String ipAddress = getClientIp(request);
@@ -152,9 +148,7 @@ public class AuthController {
             var refreshToken = tokenOpt.get();
 
             if (!refreshToken.getIpAddress().equals(ipAddress) ||
-                !refreshToken.getUserAgent().equals(userAgent) ||
-                (fingerprint != null && refreshToken.getFingerprint() != null &&
-                 !fingerprint.equals(refreshToken.getFingerprint()))) {
+                !refreshToken.getUserAgent().equals(userAgent)) {
                 throw new org.springframework.security.authentication.BadCredentialsException("Token binding mismatch");
             }
 
@@ -166,17 +160,14 @@ public class AuthController {
     }
 
     @Operation(summary = "Проверка токена", security = @SecurityRequirement(name = "BearerAuth"))
-    @PostMapping("/introspect")
-    public ResponseEntity<?> introspect(
-            HttpServletRequest request,
-            @RequestHeader(value = "X-Fingerprint", required = false) String fingerprint,
-            @RequestHeader(value = "Authorization", required = true) String authHeader
-    ) {
+    @GetMapping("/introspect")
+    public ResponseEntity<?> introspect(HttpServletRequest request) {
+        String authHeader = request.getHeader("Authorization");
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
             return ResponseEntity.ok(Map.of("active", false, "error", "Missing or invalid Authorization header"));
         }
 
-        String accessTokenValue = authHeader.substring(7); // Убираем "Bearer " из начала
+        String accessTokenValue = authHeader.substring(7);
         String ipAddress = getClientIp(request);
         String userAgent = request.getHeader("User-Agent");
 
@@ -184,7 +175,7 @@ public class AuthController {
             accessTokenValue,
             ipAddress,
             userAgent,
-            fingerprint
+            null
         );
 
         if (isValid) {
@@ -203,7 +194,7 @@ public class AuthController {
             }
         }
 
-        return ResponseEntity.ok(Map.of("active", isValid));
+        return ResponseEntity.ok(Map.of("active", false));
     }
 
     private String getClientIp(HttpServletRequest request) {
