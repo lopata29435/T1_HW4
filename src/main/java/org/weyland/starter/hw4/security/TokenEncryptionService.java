@@ -1,67 +1,85 @@
 package org.weyland.starter.hw4.security;
 
+import com.nimbusds.jose.*;
+import com.nimbusds.jose.crypto.*;
+import com.nimbusds.jose.jwk.OctetSequenceKey;
+import com.nimbusds.jwt.*;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import javax.crypto.Cipher;
+
 import javax.crypto.SecretKey;
-import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
-import java.security.SecureRandom;
+import java.text.ParseException;
 import java.util.Base64;
+import java.util.Date;
+import java.util.Map;
+import java.util.UUID;
 
 @Service
 public class TokenEncryptionService {
+
     @Value("${token.encryption.key}")
     private String encryptionKey;
 
-    private static final int GCM_IV_LENGTH = 12;
-    private static final int GCM_TAG_LENGTH = 128;
-    private final SecureRandom secureRandom = new SecureRandom();
-
-    public String encryptToken(String token) {
+    /**
+     * Создает JWE токен с заданными claims
+     */
+    public String createJwe(String subject, Map<String, Object> claims) {
         try {
-            byte[] iv = new byte[GCM_IV_LENGTH];
-            secureRandom.nextBytes(iv);
+            JWEHeader header = new JWEHeader.Builder(JWEAlgorithm.DIR, EncryptionMethod.A192GCM)
+                    .contentType("JWT")
+                    .build();
+
+            JWTClaimsSet.Builder claimsBuilder = new JWTClaimsSet.Builder()
+                    .subject(subject)
+                    .issueTime(new Date())
+                    .jwtID(UUID.randomUUID().toString());
+
+            claims.forEach(claimsBuilder::claim);
+
+            JWTClaimsSet claimsSet = claimsBuilder.build();
+
+            EncryptedJWT jwt = new EncryptedJWT(header, claimsSet);
 
             SecretKey key = new SecretKeySpec(Base64.getDecoder().decode(encryptionKey), "AES");
 
-            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            GCMParameterSpec parameterSpec = new GCMParameterSpec(GCM_TAG_LENGTH, iv);
-            cipher.init(Cipher.ENCRYPT_MODE, key, parameterSpec);
+            JWEEncrypter encrypter = new DirectEncrypter(key);
+            jwt.encrypt(encrypter);
 
-            byte[] encryptedData = cipher.doFinal(token.getBytes());
-
-            String ivBase64 = Base64.getEncoder().encodeToString(iv);
-            String encryptedBase64 = Base64.getEncoder().encodeToString(encryptedData);
-
-            return ivBase64 + ":" + encryptedBase64;
-        } catch (Exception e) {
-            throw new RuntimeException("Error encrypting token", e);
+            return jwt.serialize();
+        } catch (JOSEException e) {
+            throw new RuntimeException("Error creating JWE token", e);
         }
     }
 
-    public String decryptToken(String encryptedToken) {
+    public JWTClaimsSet parseJwe(String jweString) {
         try {
-            String[] parts = encryptedToken.split(":");
-            if (parts.length != 2) {
-                throw new IllegalArgumentException("Invalid token format");
-            }
-
-            byte[] iv = Base64.getDecoder().decode(parts[0]);
-            byte[] encryptedData = Base64.getDecoder().decode(parts[1]);
+            EncryptedJWT jwt = EncryptedJWT.parse(jweString);
 
             SecretKey key = new SecretKeySpec(Base64.getDecoder().decode(encryptionKey), "AES");
 
-            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            GCMParameterSpec parameterSpec = new GCMParameterSpec(GCM_TAG_LENGTH, iv);
-            cipher.init(Cipher.DECRYPT_MODE, key, parameterSpec);
+            JWEDecrypter decrypter = new DirectDecrypter(key);
+            jwt.decrypt(decrypter);
 
-            byte[] decryptedData = cipher.doFinal(encryptedData);
-            String decryptedToken = new String(decryptedData);
+            return jwt.getJWTClaimsSet();
 
-            return decryptedToken;
+        } catch (ParseException | JOSEException e) {
+            throw new RuntimeException("Error parsing JWE token", e);
+        }
+    }
+
+    public boolean validateJwe(String jweString) {
+        try {
+            EncryptedJWT jwt = EncryptedJWT.parse(jweString);
+
+            SecretKey key = new SecretKeySpec(Base64.getDecoder().decode(encryptionKey), "AES");
+
+            JWEDecrypter decrypter = new DirectDecrypter(key);
+            jwt.decrypt(decrypter);
+
+            return true;
         } catch (Exception e) {
-            throw new RuntimeException("Error decrypting token", e);
+            return false;
         }
     }
 }
