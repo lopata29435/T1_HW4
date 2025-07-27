@@ -2,7 +2,6 @@ package org.weyland.starter.hw4.security;
 
 import org.springframework.security.access.PermissionEvaluator;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.core.userdetails.UserDetails;
 import org.weyland.starter.hw4.model.User;
 import org.weyland.starter.hw4.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;

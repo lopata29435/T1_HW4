@@ -3,34 +3,22 @@ package org.weyland.starter.hw4.controller;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.weyland.starter.hw4.service.UserService;
 import org.weyland.starter.hw4.model.User;
-import org.springframework.security.authentication.AuthenticationManager;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.AuthenticationException;
+import org.weyland.starter.hw4.model.AccessToken;
+import org.weyland.starter.hw4.model.RefreshToken;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.http.HttpStatus;
 import org.weyland.starter.hw4.service.TokenService;
-import org.weyland.starter.hw4.service.JwtService;
 import org.weyland.starter.hw4.service.AuditService;
-import java.time.Instant;
-import java.util.HashMap;
+import org.weyland.starter.hw4.repository.AccessTokenRepository;
 import java.util.Map;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.validation.annotation.Validated;
 import jakarta.validation.Valid;
-import org.weyland.starter.hw4.dto.RegisterRequest;
-import org.weyland.starter.hw4.dto.LoginRequest;
-import org.weyland.starter.hw4.dto.RefreshRequest;
-import org.weyland.starter.hw4.dto.LogoutRequest;
-import org.weyland.starter.hw4.dto.IntrospectRequest;
+import org.weyland.starter.hw4.dto.*;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
-import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.core.GrantedAuthority;
 
 @RestController
 @RequestMapping("/auth")
@@ -42,15 +30,11 @@ public class AuthController {
     @Autowired
     private TokenService tokenService;
     @Autowired
-    private JwtService jwtService;
-    @Autowired
     private PasswordEncoder passwordEncoder;
     @Autowired
     private AuditService auditService;
-    @Value("${jwt.access-token.expiration:900}")
-    private long accessTokenExpiration;
-    @Value("${jwt.refresh-token.expiration:604800}")
-    private long refreshTokenExpiration;
+    @Autowired
+    private AccessTokenRepository accessTokenRepository;
 
     @Operation(summary = "Регистрация пользователя")
     @PostMapping("/register")
@@ -70,78 +54,163 @@ public class AuthController {
 
     @Operation(summary = "Аутентификация пользователя")
     @PostMapping("/login")
-    public ResponseEntity<?> login(@Valid @RequestBody LoginRequest req, HttpServletRequest request) {
+    public ResponseEntity<?> login(
+            @Valid @RequestBody LoginRequest req,
+            HttpServletRequest request,
+            @RequestHeader(value = "X-Fingerprint", required = false) String fingerprint
+    ) {
         String login = req.getLogin();
         String password = req.getPassword();
+
         var userOpt = userService.findByLogin(login);
         if (userOpt.isEmpty() || !passwordEncoder.matches(password, userOpt.get().getPassword())) {
             throw new org.springframework.security.authentication.BadCredentialsException("Invalid credentials");
         }
+
         var user = userOpt.get();
-        String accessToken = jwtService.generateAccessToken(user, accessTokenExpiration);
-        Instant refreshExp = Instant.now().plusSeconds(refreshTokenExpiration);
-        var refreshToken = tokenService.createRefreshToken(user, refreshExp);
-        auditService.log(user, "LOGIN", request.getRemoteAddr());
-        var resp = new HashMap<String, Object>();
-        resp.put("accessToken", accessToken);
-        resp.put("refreshToken", refreshToken.getToken());
-        return ResponseEntity.ok(resp);
+        String ipAddress = getClientIp(request);
+        String userAgent = request.getHeader("User-Agent");
+
+        AccessToken accessToken = tokenService.createAccessToken(user, ipAddress, userAgent, fingerprint);
+        RefreshToken refreshToken = tokenService.createRefreshToken(user, ipAddress, userAgent, fingerprint);
+
+        auditService.log(user, "LOGIN", ipAddress);
+
+        return ResponseEntity.ok(Map.of(
+                "accessToken", accessToken.getToken(),
+                "refreshToken", refreshToken.getToken()
+        ));
     }
 
     @Operation(summary = "Обновление access-токена", security = @SecurityRequirement(name = "BearerAuth"))
     @PostMapping("/refresh")
-    public ResponseEntity<?> refresh(@Valid @RequestBody RefreshRequest req, HttpServletRequest request) {
+    public ResponseEntity<?> refresh(
+            @Valid @RequestBody RefreshRequest req,
+            HttpServletRequest request,
+            @RequestHeader(value = "X-Fingerprint", required = false) String fingerprint
+    ) {
         String refreshTokenValue = req.getRefreshToken();
+        String ipAddress = getClientIp(request);
+        String userAgent = request.getHeader("User-Agent");
+
         var tokenOpt = tokenService.findByToken(refreshTokenValue);
         if (tokenOpt.isEmpty()) {
             throw new org.springframework.security.authentication.BadCredentialsException("Invalid refresh token");
         }
-        var token = tokenOpt.get();
-        if (token.isRevoked() || token.isUsed() || token.getExpiresAt().isBefore(Instant.now())) {
-            throw new org.springframework.security.authentication.BadCredentialsException("Refresh token is not valid");
-        }
-        var user = token.getUser();
-        tokenService.markTokenUsed(token);
-        String accessToken = jwtService.generateAccessToken(user, accessTokenExpiration);
-        Instant refreshExp = Instant.now().plusSeconds(refreshTokenExpiration);
-        var newRefreshToken = tokenService.createRefreshToken(user, refreshExp);
-        auditService.log(user, "REFRESH", request.getRemoteAddr());
-        var resp = new HashMap<String, Object>();
-        resp.put("accessToken", accessToken);
-        resp.put("refreshToken", newRefreshToken.getToken());
-        return ResponseEntity.ok(resp);
-    }
 
-    @Operation(summary = "Отзыв refresh-токена", security = @SecurityRequirement(name = "BearerAuth"))
-    @PostMapping("/logout")
-    public ResponseEntity<?> logout(@Valid @RequestBody LogoutRequest req, HttpServletRequest request) {
-        String refreshTokenValue = req.getRefreshToken();
-        var tokenOpt = tokenService.findByToken(refreshTokenValue);
-        if (tokenOpt.isEmpty()) {
-            throw new org.springframework.security.authentication.BadCredentialsException("Invalid refresh token");
-        }
-        var token = tokenOpt.get();
-        if (token.isRevoked()) {
-            throw new IllegalStateException("Token already revoked");
-        }
-        tokenService.revokeToken(token);
-        auditService.log(token.getUser(), "LOGOUT", request.getRemoteAddr());
-        return ResponseEntity.ok(Map.of("message", "Token revoked"));
-    }
+        var refreshToken = tokenOpt.get();
 
-    @Operation(summary = "Introspect access-токена", security = @SecurityRequirement(name = "BearerAuth"))
-    @GetMapping("/introspect")
-    public ResponseEntity<?> introspect() {
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication == null || !authentication.isAuthenticated() || authentication.getPrincipal().equals("anonymousUser")) {
-            return ResponseEntity.ok(Map.of("active", false));
+        if (!refreshToken.getIpAddress().equals(ipAddress) ||
+                !refreshToken.getUserAgent().equals(userAgent) ||
+                (fingerprint != null && !fingerprint.equals(refreshToken.getFingerprint()))) {
+            throw new org.springframework.security.authentication.BadCredentialsException("Token binding mismatch");
         }
-        String username = authentication.getName();
-        var roles = authentication.getAuthorities().stream().map(GrantedAuthority::getAuthority).toList();
+
+        if (refreshToken.isRevoked() || refreshToken.isUsed()) {
+            tokenService.revokeAllUserTokens(refreshToken.getUser().getId());
+            throw new org.springframework.security.authentication.BadCredentialsException("Refresh token has been revoked");
+        }
+
+        AccessToken newAccessToken = tokenService.createAccessToken(
+                refreshToken.getUser(),
+                ipAddress,
+                userAgent,
+                fingerprint
+        );
+
+        tokenService.markTokenUsed(refreshToken);
+
+        RefreshToken newRefreshToken = tokenService.createRefreshToken(
+                refreshToken.getUser(),
+                ipAddress,
+                userAgent,
+                fingerprint
+        );
+
+        tokenService.revokeAccessTokensByRefreshToken(refreshToken.getId());
+
         return ResponseEntity.ok(Map.of(
-            "active", true,
-            "user", username,
-            "roles", roles
+                "accessToken", newAccessToken.getToken(),
+                "refreshToken", newRefreshToken.getToken()
         ));
     }
-} 
+
+    @Operation(summary = "Выход из системы", security = @SecurityRequirement(name = "BearerAuth"))
+    @PostMapping("/logout")
+    public ResponseEntity<?> logout(
+            @Valid @RequestBody LogoutRequest req,
+            HttpServletRequest request,
+            @RequestHeader(value = "X-Fingerprint", required = false) String fingerprint
+    ) {
+        String refreshTokenValue = req.getRefreshToken();
+        String ipAddress = getClientIp(request);
+        String userAgent = request.getHeader("User-Agent");
+
+        var tokenOpt = tokenService.findByToken(refreshTokenValue);
+
+        if (tokenOpt.isPresent()) {
+            var refreshToken = tokenOpt.get();
+
+            if (!refreshToken.getIpAddress().equals(ipAddress) ||
+                !refreshToken.getUserAgent().equals(userAgent) ||
+                (fingerprint != null && refreshToken.getFingerprint() != null &&
+                 !fingerprint.equals(refreshToken.getFingerprint()))) {
+                throw new org.springframework.security.authentication.BadCredentialsException("Token binding mismatch");
+            }
+
+            tokenService.revokeAllUserTokens(refreshToken.getUser().getId());
+            auditService.log(refreshToken.getUser(), "LOGOUT", ipAddress);
+        }
+
+        return ResponseEntity.ok(Map.of("message", "Successfully logged out"));
+    }
+
+    @Operation(summary = "Проверка токена", security = @SecurityRequirement(name = "BearerAuth"))
+    @PostMapping("/introspect")
+    public ResponseEntity<?> introspect(
+            HttpServletRequest request,
+            @RequestHeader(value = "X-Fingerprint", required = false) String fingerprint,
+            @RequestHeader(value = "Authorization", required = true) String authHeader
+    ) {
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            return ResponseEntity.ok(Map.of("active", false, "error", "Missing or invalid Authorization header"));
+        }
+
+        String accessTokenValue = authHeader.substring(7); // Убираем "Bearer " из начала
+        String ipAddress = getClientIp(request);
+        String userAgent = request.getHeader("User-Agent");
+
+        boolean isValid = tokenService.validateAccessToken(
+            accessTokenValue,
+            ipAddress,
+            userAgent,
+            fingerprint
+        );
+
+        if (isValid) {
+            var tokenOpt = accessTokenRepository.findByToken(accessTokenValue);
+            if (tokenOpt.isPresent()) {
+                AccessToken token = tokenOpt.get();
+                User user = token.getUser();
+                return ResponseEntity.ok(Map.of(
+                    "active", true,
+                    "userId", user.getId(),
+                    "login", user.getLogin(),
+                    "email", user.getEmail(),
+                    "roles", user.getRoles().stream().map(r -> r.getName().name()).toList(),
+                    "exp", token.getExpiresAt().getEpochSecond()
+                ));
+            }
+        }
+
+        return ResponseEntity.ok(Map.of("active", isValid));
+    }
+
+    private String getClientIp(HttpServletRequest request) {
+        String xfHeader = request.getHeader("X-Forwarded-For");
+        if (xfHeader == null) {
+            return request.getRemoteAddr();
+        }
+        return xfHeader.split(",")[0];
+    }
+}
